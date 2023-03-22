@@ -20,19 +20,34 @@ library('xml2')
 library('magrittr')
 library('RSelenium')
 
-# catch <- function(bgg_link){
-#   while(TRUE){
-#     html <- try(xml2::read_html(httr::GET(bgg_link)), silent=TRUE)
-#     if(!is(html, 'try-error')) break
-#   }
-#   return(html)
-# }
+##############################################################
+####################### backup folder ########################
+##############################################################
 
-catch_s <- function(bgg_link){
-  
-  remDr$navigate(bgg_link)
-  pg <- remDr$getPageSource()[[1]]
-  return(read_html(pg) )
+files <- list.files("data", "*.[RData|csv]", include.dirs = FALSE)
+extDate <- na.omit(str_extract(files, "\\d{4}-\\d{2}-\\d{2}"))[1]
+new_dir <- paste0("data/", extDate)
+dir.create(new_dir)
+
+copyStatus <- file.copy(paste0("data/",files), 
+                paste0(new_dir,"/",files))
+
+if(!all(copyStatus)) {
+  stop("failed copying files")
+} else {
+  file.remove(paste0("data/", files))
+}
+
+##############################################################
+##############################################################
+##############################################################
+
+catch <- function(bgg_link){
+  while(TRUE){
+    html <- try(xml2::read_html(httr::GET(bgg_link)), silent=TRUE)
+    if(!is(html, 'try-error')) break
+  }
+  return(html)
 }
 
 npages <- catch("http://boardgamegeek.com/browse/boardgame/page/1") |>
@@ -43,9 +58,18 @@ npages <- catch("http://boardgamegeek.com/browse/boardgame/page/1") |>
             as.numeric()
 npages
 
+
+catch_s <- function(bgg_link){
+  
+  remDr$navigate(bgg_link)
+  pg <- remDr$getPageSource()[[1]]
+  return(read_html(pg) )
+}
+
+
 core <- function(i){
   # print(paste0('P?gina ',i, ' de 974'))
-  bgg_link = paste0('http://boardgamegeek.com/browse/boardgame/page/',i)
+  bgg_link <- paste0('http://boardgamegeek.com/browse/boardgame/page/',i)
   
   html <- catch_s(bgg_link)
   
@@ -79,9 +103,24 @@ clusterExport(cl, c("core", "catch_s"),
               envir=environment())
 
 ports <- as.integer(sample(3000:4000, ncores))
-length(unique(ports)) == ncores
 
-clusterApply(cl, ports, function(x){
+if(length(unique(ports)) == ncores) {
+  stop("Non unique ports used")
+}
+portsweb <- 7900:(7900+ncores-1)
+
+
+images <- c()
+
+for(i in 1:ncores){
+  new_img <- system(glue::glue("docker run -d -p {ports[i]}:4444 -p {portsweb[i]}:7900 --shm-size 4g selenium/standalone-firefox:latest"), intern=FALSE, ignore.stdout=FALSE)
+  images <- c(images, new_image)
+}
+
+username <- rstudioapi::showPrompt("BGG Username", "BGG username")
+password <- rstudioapi::askForPassword()
+
+clusterApply(cl, x = ports, username = username, password = password, function(x, username, password){
   # Here you load the libraries on each core
   library("RSelenium")
   library("dplyr")
@@ -91,22 +130,24 @@ clusterApply(cl, ports, function(x){
   
   # Pay attention to the use of the superassignment operator.
   
-  try(
-    rD <<- RSelenium::rsDriver(
-      browser = "chrome",
-      chromever = "108.0.5359.22",
-      port = x
-    )
-  )
+  # try(
+  #   rD <<- RSelenium::rsDriver(
+  #     browser = "chrome",
+  #     port = x,
+  #     verbose = T,
+  #     check = FALSE
+  #   )
+  # )
+  
   
   # Pay attention to the use of the superassignment operator.
   remDr <<- remoteDriver(
     remoteServerAddr = "localhost",
-    port = x
+    port = x,
+    browserName = "firefox"
   )
   
-  username <- rstudioapi::showPrompt("BGG Username", "BGG username")
-  password <- rstudioapi::askForPassword()
+
   
   #### bgg login
   
@@ -133,15 +174,34 @@ outp <- parLapply(cl, 1:npages, function(x) {
   s
 })
 
+
+close_rselenium <- function(){
+  clusterEvalQ(cl, {
+    remDr$close()
+    rD$server$stop()
+  })
+  
+  for(img in images) {
+    system(glue::glue("docker stop {img}"), 
+           intern=FALSE, 
+           ignore.stdout=FALSE)
+    }
+}
+
+close_rselenium()
+
+
 snow::stopCluster(cl)
 
 full <- data.table::rbindlist(outp)
 
-full[,1] <- as.numeric(full[,1])
+nrow(full)
+
+full[,1] <- as.numeric(full$`Board Game Rank`)
 full <- full[,-2]
 full <- full[order(full$`Board Game Rank`),]
 
-write.csv(full, glue::glue('boards_list_{Sys.Date()}.csv'), row.names=F)
+write.csv(full, glue::glue('data/boards_list_{Sys.Date()}.csv'), row.names=F)
 
 ###############################################################
 ############## extracting detailed info #######################
@@ -153,10 +213,15 @@ library("data.table")
 library("stringr")
 library("jsonlite")
 
-full <- read.csv('boards_rnk_2023-01-06.csv', header = T, stringsAsFactors = F)
+latestFiles <-list.files("data", "boards_list_*", full.names = T)
+latestFile <- latestFiles[order(latestFile)][1]
 
-full$ano <- str_extract(full$Title, '(?![(])d+(?=[)])')
-full$title <- str_extract(full$Title, '.*(?=([ntt]|))')
+full <- read.csv(latestFile, header = T, stringsAsFactors = F)
+
+full$year <- str_extract(full$Title, '(?![(])\\d+(?=[)])')
+full$title <- str_extract(full$Title, '^.+?(?=\n\t)')
+full$desc <- str_extract(full$Title, '[^\t]+$')
+full$desc <- str_replace(full$desc, '^\\(\\d+\\)$', "")
 full$id <- str_match(full$link, '/*(\\d+)/')[,2]
 
 ## 41114 resistance
