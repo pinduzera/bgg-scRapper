@@ -104,7 +104,7 @@ clusterExport(cl, c("core", "catch_s"),
 
 ports <- as.integer(sample(3000:4000, ncores))
 
-if(length(unique(ports)) == ncores) {
+if(length(unique(ports)) != ncores) {
   stop("Non unique ports used")
 }
 portsweb <- 7900:(7900+ncores-1)
@@ -114,7 +114,7 @@ images <- c()
 
 for(i in 1:ncores){
   new_img <- system(glue::glue("docker run -d -p {ports[i]}:4444 -p {portsweb[i]}:7900 --shm-size 4g selenium/standalone-firefox:latest"), intern=FALSE, ignore.stdout=FALSE)
-  images <- c(images, new_image)
+  images <- c(images, new_img)
 }
 
 username <- rstudioapi::showPrompt("BGG Username", "BGG username")
