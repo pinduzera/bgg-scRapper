@@ -114,6 +114,7 @@ images <- c()
 
 for(i in 1:ncores){
   new_img <- system(glue::glue("docker run -d -p {ports[i]}:4444 -p {portsweb[i]}:7900 --shm-size 4g selenium/standalone-firefox:latest"), intern=FALSE, ignore.stdout=FALSE)
+  print(glue::glue(("you can watch the extraction in the following link: localhost:{portsweb[i]}, password: secret")))
   images <- c(images, new_img)
 }
 
@@ -214,7 +215,7 @@ library("stringr")
 library("jsonlite")
 
 latestFiles <-list.files("data", "boards_list_*", full.names = T)
-latestFile <- latestFiles[order(latestFile)][1]
+latestFile <- latestFiles[order(latestFiles)][1]
 
 full <- read.csv(latestFile, header = T, stringsAsFactors = F)
 
@@ -243,7 +244,7 @@ get_xml <- function(game_id, sleep_time = 20){
 
 xml_to_DT <- function(parsed) {
   
-  
+  #parsed <- gameList[[1]]
   #parsed <- XML::xmlParse(xm)
   #boardgame <- XML::xmlToList(parsed)
   boardgame <- fromJSON(toJSON(parsed)) ## usethis otherwise multiple equal keys
@@ -364,6 +365,18 @@ xml_to_DT <- function(parsed) {
   }
   
   ranks <- data.table::rbindlist(lapply(boardgame$statistics$ratings$ranks, vec_to_DT), fill = T)
+  
+  if(ncol(ranks) == 1) {
+    ranks <- data.table(rank_info = "subtype",
+                        rank_id = "1",
+                        rank_family = "boardgame",
+                        rank_name = "Board Game Rank",
+                        rank = "Not Ranked",
+                        bayesaverage = "Not Ranked")
+    boardgame$statistics$ratings$ranks <- NULL
+    boardgame$statistics$ratings$ranks$rank <- unlist(ranks, use.names = F)
+  }
+  
   setnames(ranks, c("rank_info", "rank_id", "rank_family", "rank_name", "rank", "bayesaverage"))
   bg_treated[, ranks := list(ranks)]
   
@@ -383,7 +396,6 @@ extract_games <- function(game_id_list, pid = 0, tid = 0){
   
   gameList <- xmlToList(xmlParse(xm))
   gameList <- gameList[-length(gameList)]
-  
   output <- lapply(gameList, xml_to_DT)  
   
   # for(i in 1:length(gameList)){
