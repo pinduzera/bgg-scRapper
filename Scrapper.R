@@ -67,15 +67,36 @@ catch_s <- function(bgg_link){
 }
 
 
-core <- function(i){
+core <- function(i, waitTime = 3) {
   # print(paste0('P?gina ',i, ' de 974'))
-  bgg_link <- paste0('http://boardgamegeek.com/browse/boardgame/page/',i)
+  Sys.sleep(waitTime)
+
+  continue <- TRUE
+  retryWait <- 3
   
-  html <- catch_s(bgg_link)
-  
-  table <- html %>% 
-    html_element("table.collection_table") %>%
-    html_table(header = T)
+  while(continue) {
+    
+    bgg_link <- paste0('http://boardgamegeek.com/browse/boardgame/page/',i)
+    
+    html <- catch_s(bgg_link)
+    
+    table <- try(
+    {
+          html %>% 
+          html_element("table.collection_table") %>%
+          html_table(header = TRUE)
+    }
+    )
+    
+    if (any(class(table) == "try-error")) {
+      continue = TRUE
+      retryWait <- retryWait + 2
+      Sys.sleep(retryWait)
+    } else {
+      continue = FALSE
+    }
+    
+  }
   
   # if(is(table, 'try-error')) {
   #   print(paste("Error:", bgg_link))
@@ -113,13 +134,17 @@ portsweb <- 7900:(7900+ncores-1)
 images <- c()
 
 for(i in 1:ncores){
-  new_img <- system(glue::glue("docker run -d -p {ports[i]}:4444 -p {portsweb[i]}:7900 --shm-size 4g selenium/standalone-firefox:latest"), intern=FALSE, ignore.stdout=FALSE)
+  new_img <- system(glue::glue("docker run -d -p {ports[i]}:4444 -p {portsweb[i]}:7900 --shm-size 4g selenium/standalone-firefox:latest"), intern=TRUE, ignore.stdout=FALSE)
   print(glue::glue(("you can watch the extraction in the following link: localhost:{portsweb[i]}, password: secret")))
   images <- c(images, new_img)
 }
 
 username <- rstudioapi::showPrompt("BGG Username", "BGG username")
 password <- rstudioapi::askForPassword()
+
+
+## wait for containers to start properly
+# Sys.sleep(3)
 
 clusterApply(cl, x = ports, username = username, password = password, function(x, username, password){
   # Here you load the libraries on each core
@@ -171,35 +196,36 @@ clusterApply(cl, x = ports, username = username, password = password, function(x
 full <- data.frame()
 
 outp <- parLapply(cl, 1:npages, function(x) {
-  s <-  core(x)
+  s <-  core(x, waitTime = 10 + runif(1, min = -3, max = 3))
   s
 })
-
 
 close_rselenium <- function(){
   clusterEvalQ(cl, {
     remDr$close()
     rD$server$stop()
   })
-  
-  for(img in images) {
-    system(glue::glue("docker stop {img}"), 
-           intern=FALSE, 
-           ignore.stdout=FALSE)
-    }
 }
 
+stop_containers <-function() {
+  for(img in images) {
+    cat(sprintf("Stopping Docker Selenium %.10s", img), "\n")
+    out <- system(glue::glue("docker stop {img}"), 
+                  intern=TRUE, ignore.stdout=FALSE)
+  }
+}
 close_rselenium()
-
+stop_containers()
 
 snow::stopCluster(cl)
 
-full <- data.table::rbindlist(outp)
+
+full <- data.table::rbindlist(outp, fill = TRUE)
 
 nrow(full)
 
 full[,1] <- as.numeric(full$`Board Game Rank`)
-full <- full[,-2]
+full <- full[,-2] ## thumbnail image > empty
 full <- full[order(full$`Board Game Rank`),]
 
 write.csv(full, glue::glue('data/boards_list_{Sys.Date()}.csv'), row.names=F)
@@ -412,7 +438,7 @@ extract_games <- function(game_id_list, pid = 0, tid = 0){
 # saida <- extract_games("120677,12493,356035,41114,255668")
 # saida <- extract_games(id_list$idList[1])
 
-floor(length(full$id)/300) #N/call sugges max <500
+floor(length(full$id)/300) #N/call suggest max <500
 
 id_list <- data.table(id = full$id, group = rep(1:300, length.out  = length(full$id)))
 id_list <- id_list[, .(idList = paste0(id, collapse = ",")), by = group]
@@ -469,3 +495,5 @@ fwrite(final[, .SD, .SDcols = !is.list], paste0("data/bgg_data_", Sys.Date(),  "
 
 ### manipulating
 a <- final[unlist(lapply(boardgamecompilation, \(x) !is.null(x))),]
+
+
